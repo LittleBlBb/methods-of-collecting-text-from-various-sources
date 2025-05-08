@@ -77,7 +77,28 @@ def get_user_groups(user_id, access_token):
         print(f"Ошибка сети: {e}")
         return []
 
-def get_user_posts_in_group(user_id, group_id, access_token, limit=100):
+def get_user_posts_in_group_limited(user_id, group_id, access_token, limit=100):
+    try:
+        response = requests.get('https://api.vk.com/method/wall.get', params={
+            'owner_id': f'-{group_id}',
+            'count': limit,
+            'offset': 0,
+            'access_token': access_token,
+            'v': V
+        }).json()
+
+        if 'response' not in response:
+            print(f"Ошибка в группе {group_id}: {response}")
+            return []
+
+        items = response['response']['items']
+        user_posts = [post for post in items if post.get('from_id') == user_id]
+        return user_posts
+    except requests.RequestException as e:
+        print(f"Ошибка сети: {e}")
+        return []
+
+def get_user_posts_in_group_full(user_id, group_id, access_token):
     posts = []
     offset = 0
 
@@ -110,13 +131,28 @@ def get_user_posts_in_group(user_id, group_id, access_token, limit=100):
 
     return posts
 
-def get_user_posts_in_groups(user_id, access_token, limit_per_group=100, update_progress=None):
+def get_user_posts_in_groups_limited(user_id, access_token, limit_per_group=100, update_progress=None):
     groups = get_user_groups(user_id, access_token)
     all_posts = []
 
     for i, (group_id, group_name) in enumerate(groups):
-        print(f"Собираем посты из группы: {group_name}")
-        group_posts = get_user_posts_in_group(user_id, group_id, access_token, limit_per_group)
+        print(f"Собираем последние посты из группы: {group_name}")
+        group_posts = get_user_posts_in_group_limited(user_id, group_id, access_token, limit_per_group)
+        for post in group_posts:
+            post['group_name'] = group_name
+        all_posts.extend(group_posts)
+        if update_progress:
+            update_progress(i + 1, len(groups))
+
+    return all_posts
+
+def get_user_posts_in_groups_full(user_id, access_token, update_progress=None):
+    groups = get_user_groups(user_id, access_token)
+    all_posts = []
+
+    for i, (group_id, group_name) in enumerate(groups):
+        print(f"Собираем все посты из группы: {group_name}")
+        group_posts = get_user_posts_in_group_full(user_id, group_id, access_token)
         for post in group_posts:
             post['group_name'] = group_name
         all_posts.extend(group_posts)

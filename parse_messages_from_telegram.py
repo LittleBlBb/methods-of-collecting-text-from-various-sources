@@ -5,7 +5,8 @@ from telethon.sync import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError
 from telethon.tl.functions.messages import GetHistoryRequest
 
-def telegram_connect(api_id, api_hash):
+
+def telegram_connect(api_id, api_hash, root):
     print("Подключение к Telegram...")
     client = TelegramClient(
         'session', api_id, api_hash,
@@ -20,13 +21,23 @@ def telegram_connect(api_id, api_hash):
         client.connect()
         if not client.is_user_authorized():
             print("Требуется авторизация.")
-            phone = simpledialog.askstring("Авторизация Telegram", "Введите номер телефона (в формате +7XXXXXXXXXX):")
+            phone = simpledialog.askstring("Авторизация Telegram", "Введите номер телефона (в формате +7XXXXXXXXXX):",
+                                           parent=root)
+            if not phone:
+                raise Exception("Ввод номера телефона отменен")
+
             client.send_code_request(phone)
-            code = simpledialog.askstring("Авторизация Telegram", "Введите код:")
+
+            code = simpledialog.askstring("Авторизация Telegram", "Введите код:", parent=root)
+            if not code:
+                raise Exception("Ввод кода отменен")
+
             try:
                 client.sign_in(phone, code)
             except SessionPasswordNeededError:
-                password = simpledialog.askstring("Двухфакторная защита", "Введите пароль:", show="*")
+                password = simpledialog.askstring("Двухфакторная защита", "Введите пароль:", show="*", parent=root)
+                if not password:
+                    raise Exception("Ввод пароля отменен")
                 client.sign_in(password=password)
             print("Авторизация прошла успешно!")
         else:
@@ -34,22 +45,23 @@ def telegram_connect(api_id, api_hash):
     except PhoneCodeInvalidError:
         print("Ошибка: неверный код.")
         client.disconnect()
-        exit()
+        raise Exception("Неверный код авторизации")
     except PhoneCodeExpiredError:
         print("Ошибка: код истек.")
         client.disconnect()
-        exit()
+        raise Exception("Код авторизации истек")
     except Exception as e:
         print(f"Произошла ошибка: {e}")
         client.disconnect()
-        exit()
+        raise Exception(f"Ошибка подключения: {e}")
 
     if client.is_connected():
         print("Telegram клиент подключен.")
         return client
     else:
         print("Не удалось подключиться к Telegram.")
-        exit()
+        raise Exception("Не удалось подключиться к Telegram")
+
 
 def fetch_telegram_posts(client, channel_name, limit=100):
     try:
@@ -71,6 +83,7 @@ def fetch_telegram_posts(client, channel_name, limit=100):
         print(f"Ошибка при получении сообщений: {e}")
         return []
 
+
 def save_to_csv(messages, filename='telegram_posts.csv'):
     try:
         with open(filename, 'w', encoding='utf-8', newline='') as csvfile:
@@ -83,7 +96,8 @@ def save_to_csv(messages, filename='telegram_posts.csv'):
     except Exception as e:
         print(f"Ошибка при сохранении в CSV: {e}")
 
-def fetch_chat_history(client, chat_name, limit=100):
+
+def fetch_chat_history(client, chat_name, limit=None):
     messages = []
     try:
         chat = client.get_entity(chat_name)
@@ -94,9 +108,7 @@ def fetch_chat_history(client, chat_name, limit=100):
                 "sender_id": message.sender_id,
                 "text": message.text
             })
-        with open('telegram_chat_history.json', 'w', encoding='utf-8') as file:
-            json.dump(messages, file, ensure_ascii=False, indent=4)
-        print("Сообщения успешно сохранены в файл telegram_chat_history.json.")
+        return messages
     except Exception as e:
         print(f"Ошибка при скачивании сообщений: {e}")
-    return messages
+        raise Exception(f"Ошибка при получении сообщений: {e}")
