@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 import json
 import os
+import asyncio
+import threading
 from parse_messages_from_vkontakte import get_user_id, get_full_conversation, get_user_posts_in_groups_limited, get_user_posts_in_groups_full
 from parse_messages_from_telegram import telegram_connect, fetch_chat_history
 
@@ -29,7 +31,7 @@ def toggle_token_visibility(entry, button):
 def update_progress(current, total):
     if progress_bar:
         progress_bar['value'] = (current / total) * 100
-        root.update_idletasks()
+        root.after(0, root.update_idletasks)
 
 def set_ui_state(enabled):
     state = 'normal' if enabled else 'disabled'
@@ -47,22 +49,31 @@ def set_ui_state(enabled):
 def update_status(text):
     if status_label:
         status_label.config(text=text)
-        root.update_idletasks()
+        root.after(0, root.update_idletasks)
 
-def parse_from_vk():
+async def parse_from_vk_async():
     global save_folder, progress_bar, is_parsing
     if not save_folder:
-        messagebox.showerror("Ошибка", "Выберите папку для сохранения!")
+        root.after(0, lambda: messagebox.showerror("Ошибка", "Выберите папку для сохранения!"))
         return
 
     username = id_entry.get()
     access_token = token_entry.get()
     if not username or not access_token:
-        messagebox.showerror("Ошибка", "Введите имя пользователя и токен!")
+        root.after(0, lambda: messagebox.showerror("Ошибка", "Введите имя пользователя и токен!"))
         return
 
-    user_id = get_user_id(username, access_token)
+    result = await get_user_id(username, access_token)
+    if isinstance(result, tuple):
+        user_id, error = result
+        if error:
+            root.after(0, lambda: messagebox.showerror("Ошибка", error))
+            return
+    else:
+        user_id = result
+
     if not user_id:
+        root.after(0, lambda: messagebox.showerror("Ошибка", "Не удалось получить ID пользователя!"))
         return
 
     is_parsing = True
@@ -71,48 +82,46 @@ def parse_from_vk():
     progress_bar['value'] = 0
 
     parse_type = parse_type_var.get()
-    if parse_type == "Сообщения":
-        data, error = get_full_conversation(user_id, access_token, update_progress)
-        if error:
-            messagebox.showerror("Ошибка", error)
-            is_parsing = False
-            set_ui_state(True)
-            update_status("")
-            return
-        filename = f"conversation_vk_{username}.json"
-    elif parse_type == "Последние посты":
-        data = get_user_posts_in_groups_limited(user_id, access_token, update_progress=update_progress)
-        filename = f"vk_user_posts_limited_{username}.json"
-    else:
-        data = get_user_posts_in_groups_full(user_id, access_token, update_progress=update_progress)
-        filename = f"vk_user_posts_full_{username}.json"
-
-    save_path = os.path.join(save_folder, filename)
     try:
+        if parse_type == "Сообщения":
+            data, error = await get_full_conversation(user_id, access_token, update_progress)
+            if error:
+                root.after(0, lambda: messagebox.showerror("Ошибка", error))
+                return
+            filename = f"conversation_vk_{username}.json"
+        elif parse_type == "Последние посты":
+            data = await get_user_posts_in_groups_limited(user_id, access_token, update_progress=update_progress)
+            filename = f"vk_user_posts_limited_{username}.json"
+        else:
+            data = await get_user_posts_in_groups_full(user_id, access_token, update_progress=update_progress)
+            filename = f"vk_user_posts_full_{username}.json"
+
+        save_path = os.path.join(save_folder, filename)
         with open(save_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
         print(f"Данные ВКонтакте сохранены в {save_path}")
-        messagebox.showinfo("Успех", f"Данные сохранены в {save_path}")
+        root.after(0, lambda: messagebox.showinfo("Успех", f"Данные сохранены в {save_path}"))
     except Exception as e:
-        print(f"Ошибка сохранения: {e}")
-        messagebox.showerror("Ошибка", f"Не удалось сохранить файл: {e}")
+        error_msg = str(e)
+        print(f"Ошибка парсинга ВКонтакте: {error_msg}")
+        root.after(0, lambda: messagebox.showerror("Ошибка", f"Не удалось получить данные: {error_msg}"))
     finally:
-        progress_bar['value'] = 100
+        root.after(0, lambda: progress_bar.__setitem__('value', 100))
+        root.after(0, lambda: set_ui_state(True))
+        root.after(0, lambda: update_status(""))
         is_parsing = False
-        set_ui_state(True)
-        update_status("")
 
-def parse_from_telegram():
+async def parse_from_telegram_async():
     global save_folder, progress_bar, is_parsing
     if not save_folder:
-        messagebox.showerror("Ошибка", "Выберите папку для сохранения!")
+        root.after(0, lambda: messagebox.showerror("Ошибка", "Выберите папку для сохранения!"))
         return
 
     chat_name = id_entry.get()
     api_id = token_entry.get()
     api_hash = api_hash_entry.get()
     if not all([chat_name, api_id, api_hash]):
-        messagebox.showerror("Ошибка", "Заполните все поля!")
+        root.after(0, lambda: messagebox.showerror("Ошибка", "Заполните все поля!"))
         return
 
     is_parsing = True
@@ -121,34 +130,64 @@ def parse_from_telegram():
     progress_bar['value'] = 0
 
     try:
-        client = telegram_connect(api_id, api_hash, root)
-        with client:
-            chat_history = fetch_chat_history(client, chat_name)
+        client = await telegram_connect(api_id, api_hash, root)
+        if not client:
+            root.after(0, lambda: messagebox.showerror("Ошибка", "Не удалось подключиться к Telegram"))
+            return
+
+        async with client:
+            chat_history, error = await fetch_chat_history(client, chat_name, update_progress)
+            if error:
+                root.after(0, lambda: messagebox.showerror("Ошибка", error))
+                return
+
         save_path = os.path.join(save_folder, f"conversation_telegram_{chat_name}.json")
         with open(save_path, "w", encoding="utf-8") as f:
             json.dump(chat_history, f, ensure_ascii=False, indent=4)
         print(f"Данные Telegram сохранены в {save_path}")
-        messagebox.showinfo("Успех", f"Данные сохранены в {save_path}")
+        root.after(0, lambda: messagebox.showinfo("Успех", f"Данные сохранены в {save_path}"))
     except Exception as e:
-        print(f"Ошибка парсинга Telegram: {e}")
-        messagebox.showerror("Ошибка", f"Не удалось получить данные: {e}")
+        error_msg = str(e)
+        print(f"Ошибка парсинга Telegram: {error_msg}")
+        root.after(0, lambda: messagebox.showerror("Ошибка", f"Не удалось получить данные: {error_msg}"))
     finally:
-        progress_bar['value'] = 100
+        root.after(0, lambda: progress_bar.__setitem__('value', 100))
+        root.after(0, lambda: set_ui_state(True))
+        root.after(0, lambda: update_status(""))
         is_parsing = False
-        set_ui_state(True)
-        update_status("")
+
+def parse_from_vk():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(parse_from_vk_async())
+    finally:
+        loop.close()
+
+def parse_from_telegram():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(parse_from_telegram_async())
+    finally:
+        loop.close()
+
+def run_in_thread(func):
+    def wrapper():
+        global is_parsing
+        if is_parsing:
+            messagebox.showwarning("Предупреждение", "Дождитесь завершения текущей операции!")
+            return
+        thread = threading.Thread(target=func, daemon=True)
+        thread.start()
+    return wrapper
 
 def start_parsing():
-    global is_parsing
-    if is_parsing:
-        messagebox.showwarning("Предупреждение", "Дождитесь завершения текущей операции!")
-        return
-
     platform = platform_var.get()
     if platform == "ВКонтакте":
-        parse_from_vk()
+        run_in_thread(parse_from_vk)()
     else:
-        parse_from_telegram()
+        run_in_thread(parse_from_telegram)()
 
 def on_platform_change(event):
     platform = platform_var.get()
