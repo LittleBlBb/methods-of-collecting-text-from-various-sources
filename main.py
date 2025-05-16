@@ -4,8 +4,8 @@ import json
 import os
 import asyncio
 import threading
-from parse_messages_from_vkontakte import get_user_id, get_full_conversation, get_user_posts_in_groups_limited, get_user_posts_in_groups_full
-from parse_messages_from_telegram import telegram_connect, fetch_chat_history
+from parse_messages_from_vkontakte import VkApiHandler
+from parse_messages_from_telegram import TelegramApiHandler
 
 # Глобальные переменные
 save_folder = ""
@@ -63,7 +63,9 @@ async def parse_from_vk_async():
         root.after(0, lambda: messagebox.showerror("Ошибка", "Введите имя пользователя и токен!"))
         return
 
-    result = await get_user_id(username, access_token)
+    # Create an instance of VkApiHandler
+    vk_handler = VkApiHandler()
+    result = await vk_handler.get_user_id(username, access_token)
     if isinstance(result, tuple):
         user_id, error = result
         if error:
@@ -84,16 +86,16 @@ async def parse_from_vk_async():
     parse_type = parse_type_var.get()
     try:
         if parse_type == "Сообщения":
-            data, error = await get_full_conversation(user_id, access_token, update_progress)
+            data, error = await vk_handler.get_full_conversation(user_id, access_token, update_progress)
             if error:
                 root.after(0, lambda: messagebox.showerror("Ошибка", error))
                 return
             filename = f"conversation_vk_{username}.json"
         elif parse_type == "Последние посты":
-            data = await get_user_posts_in_groups_limited(user_id, access_token, update_progress=update_progress)
+            data = await vk_handler.get_user_posts_in_groups_limited(user_id, access_token, update_progress=update_progress)
             filename = f"vk_user_posts_limited_{username}.json"
         else:
-            data = await get_user_posts_in_groups_full(user_id, access_token, update_progress=update_progress)
+            data = await vk_handler.get_user_posts_in_groups_full(user_id, access_token, update_progress=update_progress)
             filename = f"vk_user_posts_full_{username}.json"
 
         save_path = os.path.join(save_folder, filename)
@@ -123,20 +125,20 @@ async def parse_from_telegram_async():
     if not all([chat_name, api_id, api_hash]):
         root.after(0, lambda: messagebox.showerror("Ошибка", "Заполните все поля!"))
         return
-
+    tg_handler = TelegramApiHandler()
     is_parsing = True
     set_ui_state(False)
     update_status("Идёт парсинг...")
     progress_bar['value'] = 0
 
     try:
-        client = await telegram_connect(api_id, api_hash, root)
+        client = await tg_handler.telegram_connect(api_id, api_hash, root)
         if not client:
             root.after(0, lambda: messagebox.showerror("Ошибка", "Не удалось подключиться к Telegram"))
             return
 
         async with client:
-            chat_history, error = await fetch_chat_history(client, chat_name, update_progress)
+            chat_history, error = await tg_handler.fetch_chat_history(client, chat_name, update_progress)
             if error:
                 root.after(0, lambda: messagebox.showerror("Ошибка", error))
                 return
